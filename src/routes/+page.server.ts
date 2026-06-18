@@ -1,8 +1,8 @@
-import { redirect } from '@sveltejs/kit';
-import type { PageServerLoad } from './$types';
+import { redirect, fail } from '@sveltejs/kit';
+import type { PageServerLoad, Actions } from './$types';
 import { db } from '$lib/server/db';
 import { tickets } from '$lib/server/db/schema';
-import { eq, count } from 'drizzle-orm';
+import { eq, count, desc } from 'drizzle-orm';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
@@ -18,6 +18,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 		.orderBy(tickets.createdAt)
 		.limit(5);
 
+	const allTickets = await db
+		.select()
+		.from(tickets)
+		.orderBy(desc(tickets.createdAt));
+
 	return {
 		stats: {
 			open: open.count,
@@ -25,6 +30,38 @@ export const load: PageServerLoad = async ({ locals }) => {
 			resolved: resolved.count,
 			closed: closed.count
 		},
-		recent
+		recent,
+		byStatus: {
+			open: allTickets.filter((t) => t.status === 'open'),
+			in_progress: allTickets.filter((t) => t.status === 'in_progress'),
+			resolved: allTickets.filter((t) => t.status === 'resolved'),
+			closed: allTickets.filter((t) => t.status === 'closed')
+		}
 	};
+};
+
+export const actions: Actions = {
+	updateStatus: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+
+		const data = await request.formData();
+		const ticketId = String(data.get('ticketId') ?? '').trim();
+		const status = String(data.get('status') ?? '') as
+			| 'open'
+			| 'in_progress'
+			| 'resolved'
+			| 'closed';
+
+		const validStatuses = ['open', 'in_progress', 'resolved', 'closed'];
+		if (!ticketId || !validStatuses.includes(status)) {
+			return fail(400, { error: 'Invalid request.' });
+		}
+
+		await db
+			.update(tickets)
+			.set({ status, updatedAt: new Date() })
+			.where(eq(tickets.id, ticketId));
+
+		return { success: true };
+	}
 };
